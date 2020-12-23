@@ -1,0 +1,463 @@
+---
+title: "A Population-based study of Hospital Readmission Risk for American patients
+"
+date: "December,20, 2020"
+auther: Yuanzhe Yang
+output: html_document
+
+---
+## Introduction
+
+People’s daily lifestyles have been enormously improved since the early 21st century, due to the rapid development of global economy and scientific techniques. However, people are suffering the curse of advanced technology at the same time: improperly managed diet, insufficient physical excursive and other unhealthy behaviors bring people in a risk of common disease: diabetes. Although this chronic disease does not present apparent symptoms, it has no specific medical treatment for instant cure at present and diabetic patients tend to be more sensitive to be involved in other dangerous diseases, for instance, heart disease or pneumonia, due to their vulnerable immune system.  In the United States, diabetic patients averagely cost the Medicare extra 250 million dollars spend for their readmitted retreatment since 2011 [1], which definitely increased a financial burden on federal government. On the other hand, the rate of readmitted patients is commonly utilized as a criterion of evaluating the performance of a specific hospital: the poor diagnosis or invalid treatment could be distinguished by the high readmission rate of patients [2]. Consequently, investigate the relationship between hospital readmission and diabetes, and evaluate the influence of potential factors related with the risk of readmission could provide some profound insight for reducing the federal cost while also providing sufficient support to patients with more reasonable arrangement of medical resource. 
+
+Generally, several methods and programs had been utilized for controlling repeated hospitalization in recent years. Unplanned readmission risk could be decreased by more tightened discharge rules as proposed by Goudjerkan et al. [3]. The U.S. Centers for Medicare and Medicaid Services (CMS) has conducted an initiative program called Hospital Readmission Reeducation Program (HRRP) since 2012, sufficiently decreased the rate of repeated encounters [4]. 
+
+In this report, we initiated with our study with data cleaning and preliminary analysis on the dataset from the UCI Machine Learning Repository. The response variable we taken was “Unplanned hospital readmission”, in general, if a patient had a readmission in less than 30 days, it would be identified as a case of unplanned hospital readmission. Then we constructed models by Generalized Linear Regression (GLM) and Generalized linear mixed model (GLMM), respectively, for evaluating the potential factors that may be related to hospital readmission.  The regression results showed that and we concluded that the patients’ medical history, clinical care records and the factor of diabetes were statistically significant related with the risk of readmission.
+
+
+## Method
+### Data
+
+We focused on a data set from the UCI Machine Learning Repository (Data source:
+https://archive.ics.uci.edu/ml/datasets/diabetes). The dataset originally contains national
+clinical information data collected from over 130 US hospitals in the period from 1999 to 2008.
+71,518 patients had been traced with single or multiple records, 101,766 observations were
+included with 49 features, such as demographic and geographic information, history medical
+records, whether a patient was readmitted or not, etc. The index for hospital admission, which
+was our main interest, was assessed by the number of encounter in this dataset. And we did
+notice that 16,733 surveyed patients, that is, approximately 23.40% of them eventually had
+one or multiple experiences of readmission. For these readmitted US patients, we also
+observed that approximately 62.21% of them were commonly readmitted by twice.
+
+#### Data cleaning
+
+The process of data cleaning is inevitably necessary for our original dataset because a
+substantial proportion of missing values has been found in several covariates as shown in
+Figure 2. We directly removed the variables weight, prayer_code and medical_speciality since
+they seem to contain more than 20% unregistered records, even we only randomly sampled
+2,000 observations from the pool. Also, the missing values contained in the variable of race
+are removed. Furthermore, since our primary target of this study was exploring the
+determinants that may associated with the risk of “Unplanned hospital readmission”, in
+general, if a patient had a readmission in less than 30 days, it would be identified as a case of
+unplanned hospital readmission. Then we created a new binary variable as follows:
+
+The cleaning and reformatted dataset eventually contained 69,668 patients with 99,493
+observations and 46 variables. For exploring the validation and accuracy of our GLM and
+GLMM methods in later process, we randomly divided our dataset by a common ratio 80/20
+as training and testing datasets, respectively.
+
+```{r}
+setwd("~/Desktop/Data")
+
+# package used for analysis
+library(tidyverse)
+library(ggplot2)
+library(visdat)
+library(glmnet)
+library(foreach)
+library(lme4)
+library(pROC)
+library(ggpubr)
+library(lattice)
+
+
+# read data into R
+df1 <- read.csv("diabetes_update.csv")
+# brief view
+View(df1)
+head(df1)
+# dimension of dataframe
+dim(df1)
+# number of patients 
+length(table(df1$patient_nbr))
+# attribution of dataframe
+str(df1)
+# check NA values in dataframe
+sapply(df1, function(x) sum(is.na(x)))
+
+# proportion of NA values
+
+sum(is.na(df1$race))/nrow(df1)
+
+sum(is.na(df1$weight))/nrow(df1)
+
+sum(is.na(df1$payer_code))/nrow(df1)
+
+sum(is.na(df1$medical_specialty))/nrow(df1)
+
+# distribution of number of encounters 
+counten <-df1 %>%
+  group_by(patient_nbr) %>%
+  filter(n() > 0) %>%
+  count()
+
+table(counten$n)
+sum(table(counten$n)) - 54745
+(sum(table(counten$n)) - 54745)/sum(table(counten$n))
+10434/16773
+
+# or we can compute by the number of encounter
+table(df1$encounter_num)
+length(table(df1$encounter_num))
+a <- as.numeric(table(counten$n))
+b <- a[-1]
+p <- b/sum(b)
+labs <- paste(round(p*100,2),"%",sep="")
+labs
+ns <- names(table(counten$n))
+ns <- ns[-1]
+
+# barplot of number of encounters
+barplot(b, col = "slategray3", ylim = c(0, 12000), ylab = "Frequency",
+        names.arg = ns)
+table(counten$n)/sum(table(counten$n)) *100
+text(0.8,11500, "62.21%", cex = 0.6)
+text(2,4000, "19.84%", cex = 0.6)
+text(3.2,2050, "8.47%", cex = 0.6)
+text(4.4,1500, "4.27%", cex = 0.6)
+text(5.6,1000, "2.06%", cex = 0.6)
+text(6.8,800, "1.23%", cex = 0.6)
+
+# checking missing value
+id <- sample(1:nrow(df1), 2000, replace = FALSE)
+df_na <- subset(df1, df1$X %in% id)
+# remove missing values 
+df2 <- subset(df1, select=-c(weight, payer_code, medical_specialty))
+df3 <- df2[complete.cases(df2$race),]
+# dimension of new dataset
+dim(df3)
+
+# indicator of readmission in 30 days
+y <- rep(NA, nrow(df3))
+for(i in 1 : nrow(df3)){
+  if(df3$readmitted[i] == "<30"){
+    y[i] = 1
+  }
+  else{
+    y[i] = 0
+  }
+}
+
+df.new <- df3
+df.new$y <- ifelse(df3$readmitted == "<30", 1, 0)
+df.new <- subset(df.new, select = -readmitted)
+```
+
+
+#### Preliminary analysis
+
+Before initiating our modeling, we had a brief overview on our dataset. Table 1 summarized
+the frequency and relative frequency of the unplanned hospital readmission on categorical
+variables, such as gender and age groups, the implementation of diabetes medication. Besides,
+mean and standard deviation were computed for continuous variables, for instance, the
+inpatient days and number of lab procedures. From Table 1, we found that the odds ratio of
+being readmitted for female was slightly greater than the one for male patients; the proportion
+of readmission within 30 days did increase along with older patients. For the category of
+ethnicity, no obvious pattern could be intuitively detected. Furthermore, the odds ratio of
+readmission between diabetic and non-diabetic patients was greater than 1, which was
+computed by (9.00/67.89)/(2.22/20.89), indicating a likelihood that the diabetic patients
+would be readmitted to hospital at a higher risk than other patient. Meanwhile, we also noticed
+that there were differences in the number of inpatients and emergency visits between
+readmitted patients and non-readmitted patients, implying that the probability of
+readmission might be infected by these factors. However, we should notice that the dataset
+had an imbalanced issue since the readmission rate was only 11.22% out of the whole dataset,
+therefore, the accuracy and efficiency of our later modelization need to be elaborately
+examined.
+
+```{r}
+# descriptive statistics
+table(y)
+prop.table(table(y))
+table(df3$gender, y)
+prop.table(table(df3$gender, y))
+table(df3$age, y)
+prop.table(table(df3$age, y))
+table(df3$race, y)
+prop.table(table(df3$race, y))
+
+table(df3$diabetesMed, y)
+prop.table(table(df3$diabetesMed, y))
+table(df3$change, y)
+prop.table(table(df3$change, y))
+aggregate(df3$num_lab_procedures, list(y), mean)
+aggregate(df3$num_lab_procedures, list(y), sd)
+
+aggregate(df3$Length.of.Sta, list(y), mean)
+aggregate(df3$Length.of.Stay, list(y), sd)
+
+aggregate(df3$num_medications, list(y), mean)
+aggregate(df3$num_medications, list(y), sd)
+
+aggregate(df3$number_inpatient, list(y), mean)
+aggregate(df3$number_inpatient, list(y), sd)
+
+aggregate(df3$number_emergency, list(y), mean)
+aggregate(df3$number_emergency, list(y), sd)
+
+prop.table(table(df3$gender, y),margin = 1)
+a <- c(0.8869, 0.1131, 0.8888, 0.1112)
+
+
+df3$readmitted <- y
+df3 <- df3[-29794,]
+df3$gender <- factor(df3$gender, levels = c("Female", "Male"))
+
+# plots
+# age group
+p1 <- df3 %>% ggplot(mapping = aes(x = as.factor(age), fill = as.factor(readmitted))) +
+    geom_bar() +
+  labs(
+       x = "Age",
+       y = "Counts ") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), legend.position = "none")
+  
+# race group
+
+p3 <- df3 %>% ggplot(mapping = aes(x = as.factor(race), fill = as.factor(readmitted))) +
+    geom_bar() +
+  labs(
+       x = "Race",
+       y = "Counts ") +
+scale_fill_discrete(name = "Readmitted", labels = c("No", "Yes"))
+
+
+# gender group
+p2 <- df3 %>% ggplot(mapping = aes(x = as.factor(gender), fill = as.factor(readmitted))) +
+    geom_bar() +
+  labs(
+       x = "Gender",
+       y = "Counts ") +
+  theme(legend.position = "none")
+
+ggarrange(p1, p2, p3, nrow = 1, ncol = 3)
+# bar plot 
+yy <- y[-29794]
+g <- df3$gender[-29794]
+g <- factor(g, levels = c("Female", "Male"))
+barplot(table(yy, g))
+
+# create organized dataframe
+
+df <-subset(df.new, select=-c(X, encounter_id, admission_source_id, encounter_num, examide,citoglipton))
+
+df.new <-subset(df.new, select=-c(X, encounter_id, admission_source_id, encounter_num, examide,citoglipton))
+
+df <- df[-29794,]
+
+# training and testing dataset 
+set.seed(333)
+train.id = sample(1 : nrow(df), 0.8*nrow(df), replace = FALSE)
+train = df[train.id, ]
+test = df[-train.id, ]
+
+```
+
+## Models
+
+### Variable selection
+
+In order to allocate an appropriate combination of explanatory variables for fitting our model,
+we apply the method of forward and backward stepwise regression proposed by Efroymson
+[5]. The algorithms within this selection process is straightforward by a series of criteria, such
+as AIC, BIC and Mallows's Cp. By applying R programming, we have a stepwise selected logistic
+model with 9 variables: Number of inpatient visits, Diabetes medication prescribed, Number
+of diagnoses, Number of diagnoses, Metformin, Discharge disposition, Length of stay, Number
+of medication and Insulin.
+
+#### Variance Component Model, GLM and GLMM
+
+For detecting the variation in the tendency of being readmitted that could be attributed to the
+individuals, for a binary response, it has a basic form as follows:
+
+where $\pi_ij$ is the probability of 𝑖th individual being readmitted to hospital within 30 days after
+𝑗th encounter. 𝜇" it the deviation in the likelihood of readmission for the 𝑖th individual from
+the average. 𝜀"# is the term of error. If a random effect within each individual did exist, an
+ANOVA test between a null model and a variance component model should have a significant
+statistic to reject the null hypothesis that the two models have the same performance on fitting
+data, then random effect across different patients on the likelihood of being readmitted could
+be confirmed.
+
+Compared to a common generalized linear model (GLM), generalized linear mixed model
+(GLMM) is an extended form that included both fixed and random effects of covariates. Here,
+we consider a GLMM containing the individual effect, that is, the average likelihood of
+readmission was estimated by each random effect within patient 𝑖., that is,
+
+where 𝑿" consists of all the covariates we have selected by the method of stepwise regression
+above. Theoretically, a GLMM should be more reasonable than GLM, for fitting a longitudinal
+dataset since it modified the estimation regarding the certain variation within individuals. For
+verifying this assumption, we executed a ANOVA test between GLM and GLMM, and the
+accuracy and validation of these two models were confirmed by depicting the ROC curves on
+testing dataset.
+
+## Results
+
+#### Regression results
+
+We initially conducted an ANOVA test between a null model (only contains intercept term)
+and a variance model regarding the individual effect. The test statistic is sufficiently large
+(3491.4) to reject the null hypothesis that there is no difference between these two models.
+Then we could conclude that the likelihood of readmission did vary across patients. Other than
+this find, we also noticed that there were variations across different level of variables, for
+example, the effect of diabetes, number of inpatients, the implementation of insulin did have
+distinct heterogeneous effects on the probability of readmission, as shown in Figure 3.
+Furthermore, the regression result of GLM and GLMM are summarized in Table 2 and Table 3,
+providing statistically significant estimations for variables: number of inpatients and length of
+stays, number of diagnoses and emergency visits, as well as the status of diabetes (whether
+the patient is diabetic or not). Regarding the baseline of our models was patients without being
+prescribed with diabetic medication during his or her encounter, a diabetic patient definitely
+has a higher risk of readmission. For instance, if a patient is diabetic, then the odds of being
+readmitted within in 30 days should be exp(0.197)=1.22 multiply the odds of non-diabetic
+patient. Likewise, the implementation of insulin could be regarded as an index for evaluating
+the readmission risk: compared with the baseline, a patient who is prescribed with insulin, his
+or her odds of readmission is higher than other medicine scenarios. Additionally, patients’
+medical history and clinical care records, such as the number of inpatients and length of stay,
+number of emergency he or she had visited could be also affiliated with the classification of
+patients at risk, considering these records actually refer to physical quality and healthy
+background.
+
+### Model Validation 
+For evaluating the validation and accuracy of GLM and GLMM regressions, we predicted the
+probability of readmission on our testing dataset and depicted the ROC curves as shown in
+Figure 4. The ROC curves basically display the performance of classification by plotting the
+true positive rate (TPR) against the false positive rate (FPR). It indicated that the classification
+by GLMM was substantially better than the one by GLM, since it had a larger value of AUC.
+Therefore, GLMM model seemed to be more appropriate and efficient for fitting this dataset,
+and helped us to identify the individual difference (personal effect) in the risk of readmission
+
+```{r}
+# null model 
+fit0 <- glm(y ~ 1, data = train, family = binomial)
+# variation in patients
+fit_person <- glmer(y ~ 1 + (1 |patient_nbr), data = train, family = binomial)
+anova(fit_person, fit0)
+
+# variation in diabetes
+fit_dia <- glmer(y ~  1 + (1 | diabetesMed), data = train, family = "binomial")
+
+fit_in <- glmer(y ~  1 + (1 | number_inpatient ), data = train, family = "binomial")
+
+fit_di <- glmer(y ~  1 + (1 | number_diagnoses ), data = train, family = "binomial")
+
+fit_me <- glmer(y ~  1 + (1 | metformin ), data = train, family = "binomial")
+
+fit_en <- glmer(y ~  1 + (1 | number_emergency ), data = train, family = "binomial")
+
+fit_dis <- glmer(y ~  1 + (1 | discharge_disposition_id ), data = train, family = "binomial")
+
+fit_leng <- glmer(y ~  1 + (1 | Length.of.Stay ), data = train, family = "binomial")
+
+fit_medi <- glmer(y ~  1 + (1 | num_medications ), data = train, family = "binomial")
+
+fit_ins <- glmer(y ~  1 + (1 | insulin ), data = train, family = "binomial")
+
+dotplot(ranef(fit_dia))
+dotplot(ranef(fit_in))
+dotplot(ranef(fit_di))
+dotplot(ranef(fit_me))
+dotplot(ranef(fit_en))
+dotplot(ranef(fit_dis))
+dotplot(ranef(fit_leng))
+dotplot(ranef(fit_medi))
+dotplot(ranef(fit_ins))
+
+# Full GLM
+fit.glm <- glm(y ~ number_inpatient + diabetesMed + number_diagnoses + metformin +
+                 number_emergency + discharge_disposition_id + 
+                 + Length.of.Stay + num_medications + insulin,
+                 data = train, family = binomial(link = "logit"))
+
+# Full GLMM
+
+fit.glmm <- glmer(y ~ number_inpatient + diabetesMed + number_diagnoses + metformin +
+                 number_emergency + discharge_disposition_id + 
+                 + Length.of.Stay + num_medications + insulin + (1 |patient_nbr),
+                 data = train, family = binomial(link = "logit"))
+
+# regression table 
+(theCiMat = Pmisc::ciMat(0.95))
+parTable = summary(
+fit.glmm)$coef[, rownames(theCiMat)] %*% theCiMat
+rownames(parTable)[1]= "Baseline"
+knitr::kable(summary(fit.glmm)$coef, digits = 3)
+knitr::kable(exp(parTable), digits = 3)
+
+(theCiMat = Pmisc::ciMat(0.95))
+parTable = summary(
+fit.glm)$coef[, rownames(theCiMat)] %*% theCiMat
+rownames(parTable)[1]= "Baseline"
+knitr::kable(summary(fit.glm)$coef, digits = 3)
+knitr::kable(exp(parTable), digits = 3)
+
+
+
+# validation of model
+prob1 <- predict(fit.glm, type = "response", newdata = train)
+roc1 <- roc(as.factor(train$y) ~ prob1)
+# The True positive rate 
+TPR <- roc1$sensitivities
+# The False positive rate 
+FPR <- 1 - roc1$specificities
+
+par(mfrow = c(1,2))
+plot(FPR, TPR, xlim = c(0, 1), ylim = c(0, 1), type = "l", lwd = 2, col = "red", lty = 1, bty = "n", main = "GLM")
+abline(0, 1, lty = 2 ,lwd = 2, col = "steelblue")
+text(0.7,0.4,label = paste("AUC = ", round(auc(roc1),4)))
+
+prob2 <- predict(fit.glmm, type = "response", train)
+roc2 <- roc(as.factor(train$y) ~ prob2)
+
+# The True positive rate 
+TPR <- roc2$sensitivities
+# The False positive rate 
+FPR <- 1 - roc2$specificities
+plot(FPR, TPR, xlim = c(0, 1), ylim = c(0, 1), type = "l", lwd = 2, col = "red", lty = 1, bty = "n", main = "GLMM")
+abline(0, 1, lty = 2 , lwd = 2, col = "steelblue")
+text(0.7,0.4,label = paste("AUC = ", round(auc(roc2),4)))
+```
+
+## Discussion
+
+In this report, we focused on investigating potential determinants that could be associated
+with the classification for readmitted patients at risk. We initiated our study by the process of
+data cleaning and preliminary analysis: both the numerical and graphical evidence suggested
+that the readmission risk varied across individuals regarding their physical quality and
+healthy background. For more convinced evidence, we applied the variance component model,
+GLM and GLMM regressions. The random effect of individuals was proved by ANOVA test, the
+estimation results by GLM and GLMM indicated that diabetic patients who were prescribed
+with insulin were suffered with a higher readmission risk than others. Additionally, the
+number of inpatients and length of stays, number of emergency visits and discharge code
+could be also regarded as the index for evaluating the readmission risk. The diagnosis of model
+validation implicated that the GLMM could be more appreciate and accurate for classifying
+patients refer to readmission.
+Although several interesting facts and conclusions have been found and developed, further
+work need to be considered for improving the integrity of this study. For instance, the initial
+dataset had an imbalanced issue, although we divided the dataset by training and testing
+dataset, the potential problem of biased estimations could not be eliminated. More efficient
+and logical methods should be considered, for instance, K-fold Cross-Validation. Additionally,
+we selected our variables by the method of stepwise regression on AIC criteria, which is simple
+and neat, however we may consider to compare it with other methods like LASSO and Elastic
+net. We also noticed that although the GLMM could be performed as an accurate classification
+on readmission risk, it was extremely time-consuming by running R, hence we need to
+improve our computational efficiency and accuracy in our further work.
+
+## Reference
+
+[1] Damian M. Predicting Diabetic Readmission Rates: Moving Beyond Hba1c. Curr Trends
+Biomedical Eng & Biosci. 2017.
+[2] Hempstalk, Kathryn & Mordaunt, Dylan. (2016). Improving 30-day readmission risk
+predictions using machine learning. in Health Informatics New Zealand.
+[3] Goudjerkan, Ti'Jay & Jayabalan, Manoj. (2019). Predicting 30-day Hospital Readmission
+for Diabetes Patients Using Multilayer Perceptron. International Journal of Advanced
+Computer Science and Applications. 10. 268-275.
+[4] Fonarow, G. C., Konstam, M. A., & Yancy, C. W. (2017). The hospital readmission reduction
+program is associated with fewer readmissions, more deaths: time to reconsider.
+[5] Efroymson, M. (1966). Stepwise regression–a backward and forward look. Florham Park,
+New Jersey.
+[6] Myers, R. H., & Montgomery, D. C. (1997). A tutorial on generalized linear models. Journal
+of Quality Technology, 29(3), 274-291.
+[7] Wolfinger, R., & O'connell, M. (1993). Generalized linear mixed models a pseudolikelihood
+approach. Journal of statistical Computation and Simulation, 48(3-4), 233-243.
+[8] Gandrud, C. (2013). Reproducible research with R and R studio. CRC Press.
+[9] Zumel, N., Mount, J., & Porzak, J. (2014). Practical data science with R (pp. 101-104).
+Shelter Island, NY: Manning.
+
